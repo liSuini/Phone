@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '26232d81-5715-45e5-bc70-a8c0810756ff'
-  PropagateID: '26232d81-5715-45e5-bc70-a8c0810756ff'
-  ReservedCode1: 'b71457d8-d128-4bcc-82dd-7a164a4a3783'
-  ReservedCode2: 'b71457d8-d128-4bcc-82dd-7a164a4a3783'
+  ProduceID: 'e824d37d-6e08-40a7-9976-78386609b037'
+  PropagateID: 'e824d37d-6e08-40a7-9976-78386609b037'
+  ReservedCode1: '0bf4b56d-d00f-4f48-822b-5a164e38bfd6'
+  ReservedCode2: '0bf4b56d-d00f-4f48-822b-5a164e38bfd6'
 ---
 
 # Phone Screen Share Assistant
@@ -20,20 +20,26 @@ AIGC:
 ## 项目状态
 
 阶段 0~4（需求/领域模型/架构/技术规格/原型验证/开发计划/任务票据）已完成，见 `docs/` 与 `CONTEXT.md`。
-阶段 5（编码）进行中：票据 01（protocol 契约）与票据 02（观看端信令客户端）已完成，双端测试全绿。
+阶段 5（编码）进行中：票据 01（protocol 契约）、票据 02（观看端信令客户端）、票据 03（共享端信令服务器）已完成，含双端本机对拍全绿。
 
 ## 构建与测试
 
 环境：.NET SDK `D:\developTools\dotnet`（8.0）、Gradle `D:\developTools\gradle`（8.10.2）、JDK 17（`D:\developTools\JDK\jdk17.0.16`）。
 
 ```powershell
-# C# 端（viewer）
+# C# 端（viewer；Parity 用例需先起对拍服务器，日常用 --filter "Category!=Parity" 排除）
 dotnet test viewer\tests\Phone.Share.Protocol.Tests
-dotnet test viewer\tests\Phone.Share.Tests
+dotnet test viewer\tests\Phone.Share.Tests --filter "Category!=Parity"
 
 # Kotlin 契约模块（protocol/kotlin）
 #  wrapper 下载源已配置腾讯镜像
 protocol\kotlin\gradlew.bat -p protocol\kotlin test
+
+# 共享端 signaling 模块（android/signaling）
+android\gradlew.bat -p android\signaling test
+
+# 双端本机对拍：Kotlin 信令服务器 ↔ C# 信令客户端（自动构建、启停与测试）
+powershell -File protocol\parity\run-parity.ps1
 ```
 
 ## 关键文档
