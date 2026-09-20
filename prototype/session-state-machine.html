@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PROTOTYPE - SessionManager 状态机演示（丢弃式原型）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", sans-serif; background: #1e1e2e; color: #cdd6f4; padding: 20px; }
+  .warn { background: #f38ba8; color: #11111b; padding: 8px 12px; border-radius: 6px; font-weight: bold; margin-bottom: 16px; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .sub { color: #a6adc8; font-size: 12px; margin-bottom: 16px; }
+  .layout { display: flex; gap: 16px; flex-wrap: wrap; }
+  .panel { background: #181825; border-radius: 10px; padding: 14px; min-width: 320px; flex: 1; }
+  .panel h2 { font-size: 14px; margin-bottom: 10px; color: #89b4fa; }
+  .state-big { font-size: 26px; font-weight: bold; padding: 10px; border-radius: 8px; text-align: center; margin-bottom: 12px; }
+  .idle  { background: #45475a; }
+  .pairing, .connecting { background: #f9e2af; color: #11111b; }
+  .sharing { background: #a6e3a1; color: #11111b; }
+  .reconnecting { background: #fab387; color: #11111b; }
+  .stopping { background: #94e2d5; color: #11111b; }
+  button { display: block; width: 100%; margin: 6px 0; padding: 9px; border: none; border-radius: 6px;
+           background: #313244; color: #cdd6f4; font-size: 13px; cursor: pointer; text-align: left; }
+  button:hover { background: #45475a; }
+  button:disabled { opacity: 0.3; cursor: not-allowed; }
+  button.event::before { content: "▸ "; color: #89b4fa; }
+  .log { font-family: Consolas, monospace; font-size: 12px; max-height: 340px; overflow-y: auto; }
+  .log div { padding: 3px 6px; border-bottom: 1px solid #313244; }
+  .log .err { color: #f38ba8; }
+  .log .ok  { color: #a6e3a1; }
+  .log .info{ color: #89b4fa; }
+  .meta { font-size: 12px; color: #a6adc8; margin-top: 10px; line-height: 1.7; }
+  .trigger { background: #11111b; border: 1px solid #313244; margin-top: 10px; padding: 8px; border-radius: 6px; font-size: 12px; color: #a6adc8; }
+</style>
+</head>
+<body>
+<div class="warn">丢弃式原型（THROWAWAY PROTOTYPE）——仅用于验证 SessionManager 状态模型，不属于产品代码。验证结论见 master 分支 docs/specs/2026-09-20-prototype-validation.md</div>
+<h1>观看端 SessionManager 状态机</h1>
+<div class="sub">点按钮触发事件，观察状态迁移与日志。回答：断连/主动停止分叉、10s 重连竞争、超时兜底是否合理。</div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>当前状态</h2>
+    <div id="state" class="state-big idle">Idle</div>
+    <h2>事件（模拟外部输入）</h2>
+    <div id="events"></div>
+    <div class="trigger" id="trigger">断连 10s 计时器：未启动</div>
+  </div>
+  <div class="panel">
+    <h2>状态迁移日志（最新在下）</h2>
+    <div class="log" id="log"></div>
+  </div>
+  <div class="panel">
+    <h2>完整状态快照（每次动作后）</h2>
+    <div class="log" id="snap"></div>
+    <div class="meta">
+      转换规则要点：<br>
+      · Sharing 中 ICE 断连：先保持 Sharing + 弱信号提示，10s 不恢复才进 Reconnecting（避免误杀可恢复连接）<br>
+      · Reconnecting 单次尝试：成功→Sharing，失败→Idle（不无限循环）<br>
+      · 主动停止（手机锁屏/撤销/用户停止）：走 Stopping→Idle，永不自动重连<br>
+      · Pairing/Connecting 超时兜底回 Idle，防 UI 卡死
+    </div>
+  </div>
+</div>
+
+<script>
+// ==== 状态与事件定义（与 docs/specs/2026-09-20-technical-spec.md 第 M-V5 节一致）====
+const S = { IDLE:'Idle', PAIRING:'Pairing', CONNECTING:'Connecting', SHARING:'Sharing', RECONNECTING:'Reconnecting', STOPPING:'Stopping' };
+const E = {
+  EV_START:'用户点连接(ip,code)',
+  EV_PAIR_OK:'HTTP /pair 成功', EV_PAIR_FAIL:'配对码错误',
+  EV_ICE_CONNECTED:'ICE 建连成功', EV_ICE_DISCONNECTED:'ICE 断连信号',
+  EV_TIMEOUT_10S:'断连10s未恢复', EV_TIMEOUT_30S:'Pairing/Connecting 超时',
+  EV_PEER_STOP:'手机端主动停止(锁屏/撤销授权)', EV_USER_STOP:'用户点停止',
+  EV_RECONNECT_OK:'重连成功', EV_RECONNECT_FAIL:'重连失败'
+};
+
+// 转换表：[当前状态, 事件] -> { next, log, guard }
+const transitions = [
+  [S.IDLE, E.EV_START,        { next:S.PAIRING,   log:'发起配对，进入 Pairing' }],
+  [S.PAIRING, E.EV_PAIR_OK,  { next:S.CONNECTING, log:'配对通过，提交 SDP offer，等待 ICE', act:'startIceWait' }],
+  [S.PAIRING, E.EV_PAIR_FAIL,{ next:S.IDLE, log:'配对码错误，回 Idle', err:'配对码错误，请核对后重试' }],
+  [S.PAIRING, E.EV_TIMEOUT_30S, { next:S.IDLE, log:'配对超时兜底', err:'连接超时，请检查手机与电脑是否同一 WiFi' }],
+  [S.CONNECTING, E.EV_ICE_CONNECTED, { next:S.SHARING, log:'WebRTC 建连成功，进入 Sharing', ok:'共享开始' }],
+  [S.CONNECTING, E.EV_TIMEOUT_30S, { next:S.IDLE, log:'建连超时兜底', err:'ICE 建连超时' }],
+  [S.SHARING, E.EV_ICE_DISCONNECTED, { next:S.SHARING, log:'弱信号：断连但保持 Sharing，启动10s计时', act:'startDiscTimer', warn:'信号弱，尝试保持连接…' }],
+  [S.SHARING, E.EV_ICE_CONNECTED, { next:S.SHARING, log:'弱信号期间恢复：连接依然有效，取消10s计时', ok:'信号已恢复' }],
+  [S.SHARING, E.EV_TIMEOUT_10S, { next:S.RECONNECTING, log:'10s未恢复，进入 Reconnecting（单次尝试）', act:'startIceWait' }],
+  [S.SHARING, E.EV_PEER_STOP, { next:S.STOPPING, log:'手机主动停止 → Stopping → Idle', err:'手机已停止共享（锁屏或撤销授权）', act:'toIdle' }],
+  [S.SHARING, E.EV_USER_STOP, { next:S.STOPPING, log:'用户停止 → Stopping → Idle', act:'toIdle' }],
+  [S.RECONNECTING, E.EV_RECONNECT_OK, { next:S.SHARING, log:'重连成功，回到 Sharing', ok:'已恢复连接' }],
+  [S.RECONNECTING, E.EV_RECONNECT_FAIL, { next:S.IDLE, log:'重连失败（单次策略）→ Idle', err:'重连失败，可手动重新连接' }],
+  [S.RECONNECTING, E.EV_PEER_STOP, { next:S.STOPPING, log:'重连途中手机已停止', err:'手机已停止共享', act:'toIdle' }],
+  [S.RECONNECTING, E.EV_USER_STOP, { next:S.STOPPING, log:'重连途中用户取消', act:'toIdle' }],
+];
+
+let state = S.IDLE;
+let discTimer = null;      // Sharing 弱信号 10s 计时
+let iceWaitTimer = null;   // Pairing/Connecting/Reconnecting 超时兜底
+
+function log(msg, cls) {
+  const d = document.createElement('div');
+  d.className = cls || '';
+  d.textContent = `[${S_S()}] ${msg}`;
+  document.getElementById('log').appendChild(d);
+  document.getElementById('log').scrollTop = 1e9;
+}
+function S_S() { return new Date().toLocaleTimeString(); }
+
+function snapshot() {
+  document.getElementById('snap').innerHTML =
+    `<div>state: <b>${state}</b></div>` +
+    `<div>discTimer(10s断连计时): ${discTimer ? '运行中' : '未启动'}</div>` +
+    `<div>iceWaitTimer(超时兜底): ${iceWaitTimer ? '运行中' : '未启动'}</div>` +
+    `<div>conn: ${state===S.SHARING ? 'WebRTC PeerConnection 建立' : '-'}</div>`;
+}
+
+function setState(next) {
+  state = next;
+  const el = document.getElementById('state');
+  el.textContent = state;
+  el.className = 'state-big ' + state.toLowerCase();
+}
+
+function clearDiscTimer() { if (discTimer) { clearTimeout(discTimer); discTimer = null; } }
+function clearIceWait()   { if (iceWaitTimer) { clearTimeout(iceWaitTimer); iceWaitTimer = null; } }
+
+function act(name) {
+  if (name === 'startDiscTimer') {
+    clearDiscTimer();
+    discTimer = setTimeout(() => { discTimer = null; fire(E.EV_TIMEOUT_10S); }, 3000); // 演示用3s代替10s
+    document.getElementById('trigger').textContent = '断连计时：3秒内不恢复将进 Reconnecting（演示加速，实际10s）';
+  }
+  if (name === 'startIceWait') {
+    clearIceWait();
+    iceWaitTimer = setTimeout(() => { iceWaitTimer = null; fire(E.EV_TIMEOUT_30S); }, 5000); // 演示用5s
+    document.getElementById('trigger').textContent = '等待 ICE 建连…（演示5s超时兜底）';
+  }
+  if (name === 'toIdle') {
+    clearDiscTimer(); clearIceWait();
+    setTimeout(() => { setState(S.IDLE); log('清理完成，回到 Idle'); snapshot(); renderEvents(); }, 500);
+  }
+}
+
+function fire(eventName) {
+  const t = transitions.find(([st, ev]) => st === state && ev === eventName);
+  log(`事件: ${eventName}`, 'info');
+  if (!t) {
+    log(`当前状态不接受此事件（忽略）`, 'err');
+    snapshot(); renderEvents(); return;
+  }
+  const { next, log: msg, err, ok, warn, act: actName } = t[2];
+  setState(next);
+  log(`→ ${msg}`, err ? 'err' : (ok ? 'ok' : ''));
+  if (err) log(`UI提示: ${err}`, 'err');
+  if (ok)  log(`UI提示: ${ok}`, 'ok');
+  if (warn) log(`UI提示: ${warn}`, 'err');
+  clearDiscTimer(); clearIceWait();
+  if (actName) act(actName);
+  snapshot(); renderEvents();
+}
+
+function renderEvents() {
+  const all = Object.values(E);
+  const box = document.getElementById('events');
+  box.innerHTML = '';
+  all.forEach(ev => {
+    const valid = transitions.some(([st, e]) => st === state && e === ev);
+    const b = document.createElement('button');
+    b.className = 'event';
+    b.textContent = ev;
+    b.disabled = !valid;
+    b.onclick = () => fire(ev);
+    box.appendChild(b);
+  });
+  document.getElementById('trigger').textContent = discTimer
+    ? '断连计时运行中…'
+    : (iceWaitTimer ? '等待 ICE 建连…（5s 超时兜底）' : '计时器：未启动');
+}
+
+// 引导剧本按钮：一键走关键难例
+function walk(name) {
+  log(`── 剧本：${name} ──`, 'info');
+  if (name === '正常建连') { fire(E.EV_START); fire(E.EV_PAIR_OK); fire(E.EV_ICE_CONNECTED); }
+  if (name === '弱信号自愈') { fire(E.EV_START); fire(E.EV_PAIR_OK); fire(E.EV_ICE_CONNECTED);
+    fire(E.EV_ICE_DISCONNECTED);
+    fire(E.EV_ICE_CONNECTED); }
+  if (name === '断连重连') { fire(E.EV_START); fire(E.EV_PAIR_OK); fire(E.EV_ICE_CONNECTED);
+    fire(E.EV_ICE_DISCONNECTED); fire(E.EV_TIMEOUT_10S); fire(E.EV_RECONNECT_OK); }
+  if (name === '手机锁屏') { fire(E.EV_START); fire(E.EV_PAIR_OK); fire(E.EV_ICE_CONNECTED);
+    fire(E.EV_PEER_STOP); }
+  if (name === '重连中用户取消') { fire(E.EV_START); fire(E.EV_PAIR_OK); fire(E.EV_ICE_CONNECTED);
+    fire(E.EV_ICE_DISCONNECTED); fire(E.EV_TIMEOUT_10S); fire(E.EV_USER_STOP); }
+}
+document.querySelectorAll('.panel')[0].insertAdjacentHTML('beforeend',
+  '<h2>关键难例剧本（一键）</h2>' +
+  ['正常建连','弱信号自愈','断连重连','手机锁屏','重连中用户取消'].map(n=>`<button onclick="walk('${n}')">${n}</button>`).join(''));
+document.querySelectorAll('.panel')[0].insertAdjacentHTML('beforeend',
+  '<button onclick="location.reload()" style="background:#f38ba8;color:#11111b;font-weight:bold">重置</button>');
+
+log('状态机就绪，初始 Idle', 'info');
+snapshot(); renderEvents();
+</script>
+</body>
+</html>
