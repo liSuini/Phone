@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Phone.Share.Protocol\Phone.Share.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 样例是双端对拍的共同真理之源：复制进测试输出，测试不依赖 cwd 层级 -->
+    <None Include="..\..\..\protocol\samples\*.json" CopyToOutputDirectory="PreserveNewest" Link="samples\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

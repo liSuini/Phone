@@ -10,6 +10,14 @@ node_modules/
 dist/
 build/
 
+# .NET
+bin/
+obj/
+*.user
+
+# Gradle
+.gradle/
+
 # IDE
 .idea/
 .vscode/
