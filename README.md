@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'e824d37d-6e08-40a7-9976-78386609b037'
-  PropagateID: 'e824d37d-6e08-40a7-9976-78386609b037'
-  ReservedCode1: '0bf4b56d-d00f-4f48-822b-5a164e38bfd6'
-  ReservedCode2: '0bf4b56d-d00f-4f48-822b-5a164e38bfd6'
+  ProduceID: '32ff864d-b800-4e19-af1f-44dd307d3727'
+  PropagateID: '32ff864d-b800-4e19-af1f-44dd307d3727'
+  ReservedCode1: '3636efd4-68a4-4596-b0b5-b886d27d7ba8'
+  ReservedCode2: '3636efd4-68a4-4596-b0b5-b886d27d7ba8'
 ---
 
 # Phone Screen Share Assistant
@@ -20,7 +20,10 @@ AIGC:
 ## 项目状态
 
 阶段 0~4（需求/领域模型/架构/技术规格/原型验证/开发计划/任务票据）已完成，见 `docs/` 与 `CONTEXT.md`。
-阶段 5（编码）进行中：票据 01（protocol 契约）、票据 02（观看端信令客户端）、票据 03（共享端信令服务器）已完成，含双端本机对拍全绿。
+阶段 5（编码）进行中：
+- 票据 01（protocol 契约）、02（观看端信令客户端）、03（共享端信令服务器）完成，双端本机对拍全绿
+- 票据 04（合成画面纵贯线）C# 侧完成：I420Frame/PcmFrame 帧归一、FakeRtcReceiver 测试基建、YuvConverter+WpfFrameSink 渲染管线、SIPSorcery DataChannel 自回环（offer+non-trickle candidates+建连+消息互通）
+- 待续：票据 04 Android 侧（需 Android SDK）与 SIPSorcery 视频解码管线（FFmpeg 集成）
 
 ## 构建与测试
 
